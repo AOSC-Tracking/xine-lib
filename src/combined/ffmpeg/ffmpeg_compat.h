@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2000-2022 the xine project
+ * Copyright (C) 2000-2024 the xine project
  *
  * This file is part of xine, a unix video player.
  *
@@ -54,9 +54,16 @@
 #endif
 
 /* reordered_opaque appeared in libavcodec 51.68.0 */
-#define XFF_AVCODEC_REORDERED_OPAQUE
-#if LIBAVCODEC_VERSION_INT < XFF_INT_VERSION(51,68,0)
-# undef XFF_AVCODEC_REORDERED_OPAQUE
+#if LIBAVCODEC_VERSION_INT >= XFF_INT_VERSION(51,68,0) && LIBAVCODEC_VERSION_INT < XFF_INT_VERSION(60,0,0)
+#  define XFF_AVCODEC_REORDERED_OPAQUE
+#else
+#  undef XFF_AVCODEC_REORDERED_OPAQUE
+#endif
+
+#if LIBAVCODEC_VERSION_INT >= XFF_INT_VERSION(58,33,100)
+#  define XFF_AVCODEC_FRAME_PTS
+#else
+#  undef XFF_AVCODEC_FRAME_PTS
 #endif
 
 /* colorspace and color_range were added before 52.29.0 */
@@ -210,9 +217,11 @@
 #endif
 
 #if LIBAVCODEC_VERSION_INT < XFF_INT_VERSION(55,63,100)
-#  define XFF_FREE_CONTEXT(pp) do {av_free(pp); pp = NULL;} while (0)
+#  define XFF_FREE_CONTEXT(pp) do {if (pp) avcodec_close (pp); av_free (pp); pp = NULL;} while (0)
+#elif LIBAVCODEC_VERSION_INT < XFF_INT_VERSION(58,33,100)
+#  define XFF_FREE_CONTEXT(pp) do {if (pp) avcodec_close (pp); avcodec_free_context (&(pp));} while (0)
 #else
-#  define XFF_FREE_CONTEXT(pp) avcodec_free_context(&(pp))
+#  define XFF_FREE_CONTEXT(pp) avcodec_free_context (&(pp))
 #endif
 
 #if LIBAVCODEC_VERSION_INT < XFF_INT_VERSION(54,59,100)
@@ -303,4 +312,3 @@
 #endif /* defined(LIBAVCODEC_VERSION_INT) */
 
 #endif /* XINE_AVCODEC_COMPAT_H */
-

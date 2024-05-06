@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2000-2022 the xine project
+ * Copyright (C) 2000-2024 the xine project
  *
  * This file is part of xine, a unix video player.
  *
@@ -127,10 +127,8 @@ static int lavc_on_update_format(dxr3_driver_t *drv, dxr3_frame_t *frame)
   unsigned char use_quantizer;
 
   if (this->context) {
-    avcodec_close(this->context);
-    free(this->context);
+    XFF_FREE_CONTEXT (this->context);
     free(this->picture);
-    this->context = NULL;
     this->picture = NULL;
   }
 
@@ -344,10 +342,8 @@ static int lavc_on_unneeded(dxr3_driver_t *drv)
 #if XFF_ENCVIDEO > 1
     XFF_PACKET_UNREF (this->pkt);
 #endif
-    avcodec_close(this->context);
     XFF_FREE_CONTEXT (this->context);
     free(this->picture);
-    this->context = NULL;
     this->picture = NULL;
   }
   return 1;

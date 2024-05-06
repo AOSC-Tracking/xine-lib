@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2022 the xine project
+ * Copyright (C) 2001-2024 the xine project
  *
  * This file is part of xine, a free video player.
  *
@@ -128,6 +128,7 @@ struct ff_video_decoder_s {
 
   int64_t           pts;
   int64_t           last_pts;
+  int64_t           tagged_pts;
   int               video_step;
   int               reported_video_step;
   uint8_t           pts_tag_pass;
@@ -551,7 +552,9 @@ static int get_buffer_vaapi_vld (AVCodecContext *context, AVFrame *av_frame)
 #  ifdef XFF_FRAME_AGE
   av_frame->age = 1;
 #  endif
+#ifdef XFF_AVCODEC_REORDERED_OPAQUE
   av_frame->reordered_opaque = context->reordered_opaque;
+#endif
 
   ffsf = ffsf_new (this);
   if (!ffsf)
@@ -862,7 +865,9 @@ static int get_buffer (AVCodecContext *context, AVFrame *av_frame)
 # endif
 
   /* take over pts for this frame to have it reordered */
+#ifdef XFF_AVCODEC_REORDERED_OPAQUE
   av_frame->reordered_opaque = context->reordered_opaque;
+#endif
 
   return 0;
 }
@@ -1142,9 +1147,13 @@ static void init_video_codec (ff_video_decoder_t *this, unsigned int codec_type)
   if (this->codec->id == CODEC_ID_VC1 &&
       (!this->bih.biWidth || !this->bih.biHeight)) {
     /* VC1 codec must be re-opened with correct width and height. */
-    avcodec_close(this->context);
-
-    if (XFF_AVCODEC_OPEN (this->context, this->codec) < 0) {
+    if (this->context) {
+      _x_freep (&this->context->extradata);
+      this->context->extradata_size = 0;
+      XFF_FREE_CONTEXT (this->context);
+    }
+    this->context = XFF_ALLOC_CONTEXT ();
+    if (!(this->context && XFF_AVCODEC_OPEN (this->context, this->codec) >= 0)) {
       pthread_mutex_unlock(&ffmpeg_lock);
       xprintf (this->stream->xine, XINE_VERBOSITY_LOG,
 	       _("ffmpeg_video_dec: couldn't open decoder (pass 2)\n"));
@@ -1210,6 +1219,11 @@ static void init_video_codec (ff_video_decoder_t *this, unsigned int codec_type)
 #ifdef XFF_AVCODEC_REORDERED_OPAQUE
   /* dont want initial AV_NOPTS_VALUE here */
   this->context->reordered_opaque = 0;
+#endif
+
+#ifdef XFF_AVCODEC_FRAME_PTS
+  this->context->time_base.num = 1;
+  this->context->time_base.den = 90000 << 8;
 #endif
 }
 
@@ -1957,7 +1971,26 @@ static int64_t ff_tag_pts (ff_video_decoder_t *this, int64_t pts) {
   return (pts * 256) | this->pts_tag_pass;
 }
 
-static int64_t ff_untag_pts (ff_video_decoder_t *this, int64_t pts) {
+static int64_t ff_untag_pts (ff_video_decoder_t *this, AVFrame *av_frame) {
+  int64_t pts;
+#if defined(XFF_AVCODEC_FRAME_PTS)
+  pts = (av_frame->pts != AV_NOPTS_VALUE) ? av_frame->pts : 0;
+#  if defined(XFF_AVCODEC_REORDERED_OPAQUE)
+  /* paranoia !!! */
+  if (pts != av_frame->reordered_opaque) {
+    xprintf (this->stream->xine, XINE_VERBOSITY_DEBUG,
+      LOG_MODULE ": WARNING: frame pts %" PRId64 " != reordered_opaque %" PRId64 ".\n",
+      pts, av_frame->reordered_opaque);
+    pts = av_frame->reordered_opaque;
+  }
+  av_frame->reordered_opaque = 0;
+#  endif
+#elif defined(XFF_AVCODEC_REORDERED_OPAQUE)
+  pts = av_frame->reordered_opaque;
+  av_frame->reordered_opaque = 0;
+#else
+  pts = this->tagged_pts;
+#endif
   if ((uint8_t)(pts & 0xff) == this->pts_tag_pass) {
     /* restore sign. */
     return pts >> 8;
@@ -1982,7 +2015,9 @@ static int decode_video_wrapper (ff_video_decoder_t *this,
   this->avpkt->data = buf;
   this->avpkt->size = buf_size;
   this->avpkt->flags = AV_PKT_FLAG_KEY;
-
+# ifdef XFF_AVCODEC_FRAME_PTS
+  this->avpkt->pts = this->tagged_pts;
+# endif
 # if XFF_PALETTE == 2 || XFF_PALETTE == 3
   if (buf && this->palette_changed) {
     uint8_t *sd = av_packet_new_side_data (this->avpkt, AV_PKT_DATA_PALETTE, 256 * 4);
@@ -2092,9 +2127,14 @@ static void ff_handle_mpeg12_buffer (ff_video_decoder_t *this, buf_element_t *bu
 #endif
 
     /* apply valid pts to first frame _starting_ thereafter only */
-    if (this->pts && !this->context->reordered_opaque) {
-      this->context->reordered_opaque = 
-      this->av_frame->reordered_opaque = ff_tag_pts (this, this->pts);
+    if (this->pts && !this->tagged_pts) {
+      this->tagged_pts = ff_tag_pts (this, this->pts);
+#ifdef XFF_AVCODEC_REORDERED_OPAQUE
+      this->context->reordered_opaque = this->av_frame->reordered_opaque = this->tagged_pts;
+#endif
+#ifdef XFF_AVCODEC_FRAME_PTS
+      this->av_frame->pts = this->tagged_pts;
+#endif
       this->pts = 0;
     }
 
@@ -2205,9 +2245,11 @@ static void ff_handle_mpeg12_buffer (ff_video_decoder_t *this, buf_element_t *bu
       img->top_field_first   = this->av_frame->top_field_first;
 
       /* get back reordered pts */
-      img->pts = ff_untag_pts (this, this->av_frame->reordered_opaque);
-      this->av_frame->reordered_opaque = 0;
+      img->pts = ff_untag_pts (this, this->av_frame);
+      this->tagged_pts = 0;
+#ifdef XFF_AVCODEC_REORDERED_OPAQUE
       this->context->reordered_opaque = 0;
+#endif
 
       if (this->av_frame->repeat_pict)
         img->duration = this->video_step * 3 / 2;
@@ -2328,9 +2370,14 @@ static void ff_handle_buffer (ff_video_decoder_t *this, buf_element_t *buf) {
   }
 
   if (this->size == 0) {
+    this->tagged_pts = ff_tag_pts (this, this->pts);
     /* take over pts when we are about to buffer a frame */
-    this->av_frame->reordered_opaque = ff_tag_pts(this, this->pts);
-    this->context->reordered_opaque = ff_tag_pts(this, this->pts);
+#ifdef XFF_AVCODEC_REORDERED_OPAQUE
+    this->av_frame->reordered_opaque = this->context->reordered_opaque = this->tagged_pts;
+#endif
+#ifdef XFF_AVCODEC_FRAME_PTS
+    this->av_frame->pts = this->tagged_pts;
+#endif
     this->pts = 0;
   }
 
@@ -2403,7 +2450,10 @@ static void ff_handle_buffer (ff_video_decoder_t *this, buf_element_t *buf) {
         need_unref = 1;
 #endif
         /* reset consumed pts value */
-        this->context->reordered_opaque = ff_tag_pts(this, 0);
+        this->tagged_pts = ff_tag_pts (this, 0);
+#ifdef XFF_AVCODEC_REORDERED_OPAQUE
+        this->context->reordered_opaque = this->tagged_pts;
+#endif
 
         if (err) {
 
@@ -2437,10 +2487,14 @@ static void ff_handle_buffer (ff_video_decoder_t *this, buf_element_t *buf) {
             ff_check_bufsize(this, this->size);
             memmove (this->buf, &chunk_buf[offset], this->size);
             chunk_buf = this->buf;
-
             /* take over pts for next access unit */
-            this->av_frame->reordered_opaque = ff_tag_pts(this, this->pts);
-            this->context->reordered_opaque = ff_tag_pts(this, this->pts);
+            this->tagged_pts = ff_tag_pts (this, this->pts);
+#ifdef XFF_AVCODEC_REORDERED_OPAQUE
+            this->av_frame->reordered_opaque = this->context->reordered_opaque = this->tagged_pts;
+#endif
+#ifdef XFF_AVCODEC_FRAME_PTS
+            this->av_frame->pts = this->tagged_pts;
+#endif
             this->pts = 0;
           }
         }
@@ -2557,8 +2611,7 @@ static void ff_handle_buffer (ff_video_decoder_t *this, buf_element_t *buf) {
           ff_convert_frame(this, img, this->av_frame);
         }
 
-        img->pts  = ff_untag_pts(this, this->av_frame->reordered_opaque);
-        this->av_frame->reordered_opaque = 0;
+        img->pts  = ff_untag_pts(this, this->av_frame);
 
         /* workaround for weird 120fps streams */
         if( video_step_to_use == 750 ) {
@@ -2598,8 +2651,7 @@ static void ff_handle_buffer (ff_video_decoder_t *this, buf_element_t *buf) {
                                                 this->output_format,
                                                 VO_BOTH_FIELDS|this->frame_flags);
       /* set PTS to allow early syncing */
-      img->pts       = ff_untag_pts(this, this->av_frame->reordered_opaque);
-      this->av_frame->reordered_opaque = 0;
+      img->pts       = ff_untag_pts(this, this->av_frame);
 
       img->duration  = video_step_to_use;
 
@@ -2781,7 +2833,7 @@ static void ff_flush_internal (ff_video_decoder_t *this, int display) {
       ff_convert_frame (this, img, this->av_frame2);
     }
 
-    img->pts = ff_untag_pts (this, this->av_frame2->reordered_opaque);
+    img->pts = ff_untag_pts (this, this->av_frame2);
 
     if (video_step_to_use == 750)
       video_step_to_use = 0;
@@ -2901,7 +2953,9 @@ static void ff_dispose (video_decoder_t *this_gen) {
   if (this->decoder_ok) {
 
     pthread_mutex_lock(&ffmpeg_lock);
-    avcodec_close (this->context);
+    _x_freep (&this->context->extradata);
+    this->context->extradata_size = 0;
+    XFF_FREE_CONTEXT (this->context);
     pthread_mutex_unlock(&ffmpeg_lock);
 
 #ifdef ENABLE_DIRECT_RENDERING
@@ -2910,16 +2964,15 @@ static void ff_dispose (video_decoder_t *this_gen) {
 
     this->stream->video_out->close(this->stream->video_out, this->stream);
     this->decoder_ok = 0;
+  } else if (this->context) {
+    _x_freep (&this->context->extradata);
+    this->context->extradata_size = 0;
+    XFF_FREE_CONTEXT (this->context);
   }
 
   if (this->slice_offset_table)
     free (this->slice_offset_table);
 
-  if (this->context) {
-    _x_freep (&this->context->extradata);
-    this->context->extradata_size = 0;
-    XFF_FREE_CONTEXT (this->context);
-  }
 
 #if XFF_VIDEO > 1
   XFF_PACKET_UNREF (this->avpkt);

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2023 the xine project
+ * Copyright (C) 2001-2024 the xine project
  *
  * This file is part of xine, a free video player.
  *
@@ -67,6 +67,7 @@ typedef struct {
 
   xine_t                 *xine;
   float                   gain;
+  int                     bitexact;
 } ff_audio_class_t;
 
 typedef struct ff_audio_decoder_s {
@@ -188,14 +189,25 @@ static int ff_aac_mode_parse (ff_audio_decoder_t *this, uint8_t *buf, int size, 
         xprintf (this->stream->xine, XINE_VERBOSITY_DEBUG,
           "ffmpeg_audio_dec: found AAC ADTS syncword after %d bytes\n", i);
         if (this->buftype == BUF_AUDIO_AAC_LATM) {
+          uint8_t *ed = NULL;
+          int es = 0;
           xprintf (this->stream->xine, XINE_VERBOSITY_DEBUG,
             "ffmpeg_audio_dec: stream says LATM but is ADTS -> switching decoders\n");
-          if (this->decoder_ok) {
-            pthread_mutex_lock (&ffmpeg_lock);
-            avcodec_close (this->context);
-            pthread_mutex_unlock (&ffmpeg_lock);
-            this->decoder_ok = 0;
+          pthread_mutex_lock (&ffmpeg_lock);
+          if (this->context) {
+            ed = this->context->extradata;
+            es = this->context->extradata_size;
+            this->context->extradata = NULL;
+            this->context->extradata_size = 0;
+            XFF_FREE_CONTEXT (this->context);
           }
+          this->decoder_ok = 0;
+          this->context = XFF_ALLOC_CONTEXT ();
+          if (this->context) {
+            this->context->extradata = ed;
+            this->context->extradata_size = es;
+          }
+          pthread_mutex_unlock (&ffmpeg_lock);
           this->codec = NULL;
           ff_audio_open_codec (this, BUF_AUDIO_AAC);
         }
@@ -348,6 +360,11 @@ static int ff_audio_open_codec(ff_audio_decoder_t *this, unsigned int codec_type
     _x_stream_info_set(this->stream, XINE_STREAM_INFO_AUDIO_HANDLED, 0);
     return -1;
   }
+
+  if (this->class->bitexact)
+    this->context->flags |= CODEC_FLAG_BITEXACT;
+  else
+    this->context->flags &= ~CODEC_FLAG_BITEXACT;
 
   pthread_mutex_lock (&ffmpeg_lock);
   if (XFF_AVCODEC_OPEN (this->context, this->codec) < 0) {
@@ -1377,9 +1394,21 @@ static void ff_audio_reset (audio_decoder_t *this_gen) {
     }
 #endif
     pthread_mutex_lock (&ffmpeg_lock);
-    avcodec_close (this->context);
-    if (XFF_AVCODEC_OPEN (this->context, this->codec) < 0)
+    {
+      uint8_t *ed = this->context->extradata;
+      int es = this->context->extradata_size;
+      this->context->extradata = NULL;
+      this->context->extradata_size = 0;
+      XFF_FREE_CONTEXT (this->context);
       this->decoder_ok = 0;
+      this->context = XFF_ALLOC_CONTEXT ();
+      if (this->context) {
+        this->context->extradata = ed;
+        this->context->extradata_size = es;
+      }
+    }
+    if (XFF_AVCODEC_OPEN (this->context, this->codec) >= 0)
+      this->decoder_ok = 1;
     pthread_mutex_unlock (&ffmpeg_lock);
   }
 
@@ -1418,19 +1447,19 @@ static void ff_audio_dispose (audio_decoder_t *this_gen) {
       XFF_FREE_FRAME (this->av_frame);
     }
 #endif
-    pthread_mutex_lock (&ffmpeg_lock);
-    avcodec_close (this->context);
-    pthread_mutex_unlock (&ffmpeg_lock);
   }
+  pthread_mutex_lock (&ffmpeg_lock);
+  if (this->context) {
+    _x_freep (&this->context->extradata);
+    this->context->extradata_size = 0;
+    XFF_FREE_CONTEXT (this->context);
+  }
+  pthread_mutex_unlock (&ffmpeg_lock);
 
   ff_audio_output_close(this);
 
   xine_free_aligned (this->buf);
   xine_free_aligned (this->decode_buffer);
-
-  _x_freep (&this->context->extradata);
-  this->context->extradata_size = 0;
-  XFF_FREE_CONTEXT (this->context);
 
   XFF_PACKET_UNREF (this->avpkt);
 
@@ -1513,6 +1542,12 @@ static void dispose_audio_class (audio_decoder_class_t *this_gen) {
   free (this);
 }
 
+static void ff_bitexact_cb (void *user_data, xine_cfg_entry_t *entry) {
+  ff_audio_class_t *class = (ff_audio_class_t *)user_data;
+
+  class->bitexact = entry->num_value;
+}
+
 void *init_audio_plugin (xine_t *xine, const void *data) {
 
   ff_audio_class_t *this ;
@@ -1539,6 +1574,13 @@ void *init_audio_plugin (xine_t *xine, const void *data) {
         "This cannot be fixed by volume control, but by this setting."),
       10, ff_gain_cb, this)
     / (float)20);
+
+  this->bitexact = xine->config->register_bool (xine->config,
+      "audio.processing.ffmpeg_bitexact", 0,
+      _("Let FFmpeg use precise but slower math"),
+      _("Get slightly better sound, at the expense of speed.\n"
+        "Takes effect with next stream."),
+      10, ff_bitexact_cb, this);
 
   return this;
 }
