@@ -1393,6 +1393,9 @@ static void ff_audio_reset (audio_decoder_t *this_gen) {
       XFF_FREE_FRAME (this->av_frame);
     }
 #endif
+#if 1
+    avcodec_flush_buffers (this->context);
+#else
     pthread_mutex_lock (&ffmpeg_lock);
     {
       uint8_t *ed = this->context->extradata;
@@ -1410,6 +1413,7 @@ static void ff_audio_reset (audio_decoder_t *this_gen) {
     if (XFF_AVCODEC_OPEN (this->context, this->codec) >= 0)
       this->decoder_ok = 1;
     pthread_mutex_unlock (&ffmpeg_lock);
+#endif
   }
 
   ff_audio_reset_parser(this);

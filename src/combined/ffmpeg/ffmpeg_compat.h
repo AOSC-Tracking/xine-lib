@@ -139,6 +139,14 @@
 #  define XFF_PALETTE 3
 #endif
 
+#if LIBAVCODEC_VERSION_INT < XFF_INT_VERSION(59,42,100)
+/* AVCodecContext.slice_{offset,count} */
+#  define XFF_AVCODEC_SLICE_TABLE 1
+#else
+/* inline offset table before the frame. */
+#  define XFF_AVCODEC_SLICE_TABLE 2
+#endif
+
 #if LIBAVCODEC_VERSION_INT < XFF_INT_VERSION(59,0,100) /** << revise this */
 #  define XFF_VAAPI 1 /** << libavcodec/vaapi.h */
 #else
