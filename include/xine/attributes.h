@@ -1,0 +1,156 @@
+/*
+ * attributes.h
+ * Copyright (C) 1999-2000 Aaron Holtzman <aholtzma@ess.engr.uvic.ca>
+ * Copyright (C) 2001-2021 xine developers
+ *
+ * This file was originally part of mpeg2dec, a free MPEG-2 video stream
+ * decoder.
+ *
+ * mpeg2dec is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * mpeg2dec is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ */
+
+/* use gcc attribs to align critical data structures */
+
+#ifndef ATTRIBUTE_H_
+#define ATTRIBUTE_H_
+
+#ifdef XINE_COMPILE
+# if defined(HAVE_CONFIG_H) && !defined(__XINE_LIB_CONFIG_H__)
+#  warning Define XINE_COMPILE _only_ when tweaking xine-lib itself, and then include xine config.h early in your source file!
+# endif
+#else
+# if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ >= 95 )
+#  define SUPPORT_ATTRIBUTE_PACKED 1
+# endif
+
+# if __GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 3 )
+#  define SUPPORT_ATTRIBUTE_DEPRECATED 1
+#  define SUPPORT_ATTRIBUTE_FORMAT 1
+#  define SUPPORT_ATTRIBUTE_FORMAT_ARG 1
+#  define SUPPORT_ATTRIBUTE_MALLOC 1
+#  define SUPPORT_ATTRIBUTE_UNUSED 1
+#  define SUPPORT_ATTRIBUTE_CONST 1
+#  define SUPPORT_ATTRIBUTE_WARN_UNUSED_RESULT 1
+# endif
+
+# if __GNUC__ >= 4
+#  define SUPPORT_ATTRIBUTE_VISIBILITY_DEFAULT 1
+#  if defined(__ELF__) && __ELF__
+#   define SUPPORT_ATTRIBUTE_VISIBILITY_PROTECTED 1
+#  endif
+#  define SUPPORT_ATTRIBUTE_SENTINEL 1
+# endif
+#endif
+
+#if defined(SUPPORT_ATTRIBUTE_WARN_UNUSED_RESULT)
+#  define XINE_USED  __attribute__((warn_unused_result))
+#else
+#  define XINE_USED
+#endif
+
+#ifdef ATTRIBUTE_ALIGNED_MAX
+#define ATTR_ALIGN(align) __attribute__ ((__aligned__ ((ATTRIBUTE_ALIGNED_MAX < align) ? ATTRIBUTE_ALIGNED_MAX : align)))
+#else
+#define ATTR_ALIGN(align)
+#endif
+
+/* Export protected only for libxine functions */
+#if defined(XINE_LIBRARY_COMPILE) && defined(SUPPORT_ATTRIBUTE_VISIBILITY_PROTECTED)
+# define XINE_PROTECTED __attribute__((__visibility__("protected")))
+#elif defined(XINE_LIBRARY_COMPILE) && defined(SUPPORT_ATTRIBUTE_VISIBILITY_DEFAULT)
+# define XINE_PROTECTED __attribute__((__visibility__("default")))
+#else
+# define XINE_PROTECTED
+#endif
+
+#ifdef SUPPORT_ATTRIBUTE_SENTINEL
+# define XINE_SENTINEL __attribute__((__sentinel__))
+#else
+# define XINE_SENTINEL
+#endif
+
+#if defined(SUPPORT_ATTRIBUTE_DEPRECATED) && (!defined(XINE_COMPILE) || defined(DEBUG))
+# define XINE_DEPRECATED __attribute__((__deprecated__))
+#else
+# define XINE_DEPRECATED
+#endif
+
+#if defined(SUPPORT_ATTRIBUTE_DEPRECATED) && (!defined(XINE_LIBRARY_COMPILE)) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5 ))
+# define XINE_PRIVATE_FIELD __attribute__((__deprecated__("this is xine-engine private field")))
+#elif defined(SUPPORT_ATTRIBUTE_DEPRECATED) && (!defined(XINE_LIBRARY_COMPILE))
+# define XINE_PRIVATE_FIELD __attribute__((__deprecated__))
+#else
+# define XINE_PRIVATE_FIELD
+#endif
+
+#ifdef SUPPORT_ATTRIBUTE_WEAK
+# define XINE_WEAK __attribute__((weak))
+#else
+# define XINE_WEAK
+#endif
+
+#ifndef __attr_unused
+# ifdef SUPPORT_ATTRIBUTE_UNUSED
+#  define __attr_unused __attribute__((__unused__))
+# else
+#  define __attr_unused
+# endif
+#endif
+
+/* Format attributes */
+#ifdef SUPPORT_ATTRIBUTE_FORMAT
+# if defined(__MINGW32__)
+#  if defined(__USE_MINGW_ANSI_STDIO) && __USE_MINGW_ANSI_STDIO
+#    ifndef __MINGW_PRINTF_FORMAT
+#     define __MINGW_PRINTF_FORMAT gnu_printf
+#   endif
+#  endif
+#  ifndef __MINGW_PRINTF_FORMAT
+#   define __MINGW_PRINTF_FORMAT __printf__
+#  endif
+#  define XINE_FORMAT_PRINTF(fmt,var) __attribute__((__format__(__MINGW_PRINTF_FORMAT, fmt, var)))
+# else
+#  define XINE_FORMAT_PRINTF(fmt,var) __attribute__((__format__(__printf__, fmt, var)))
+# endif
+# define XINE_FORMAT_SCANF(fmt,var) __attribute__((__format__(__scanf__, fmt, var)))
+#else
+# define XINE_FORMAT_PRINTF(fmt,var)
+# define XINE_FORMAT_SCANF(fmt,var)
+#endif
+#ifdef SUPPORT_ATTRIBUTE_FORMAT_ARG
+# define XINE_FORMAT_PRINTF_ARG(fmt) __attribute__((__format_arg__(fmt)))
+#else
+# define XINE_FORMAT_PRINTF_ARG(fmt)
+#endif
+
+#ifdef SUPPORT_ATTRIBUTE_MALLOC
+# define XINE_MALLOC __attribute__((__malloc__))
+#else
+# define XINE_MALLOC
+#endif
+
+#ifdef SUPPORT_ATTRIBUTE_PACKED
+# define XINE_PACKED __attribute__((__packed__))
+#else
+# define XINE_PACKED
+#endif
+
+#ifdef SUPPORT_ATTRIBUTE_CONST
+# define XINE_CONST __attribute__((__const__))
+#else
+# define XINE_CONST
+#endif
+
+#endif /* ATTRIBUTE_H_ */
